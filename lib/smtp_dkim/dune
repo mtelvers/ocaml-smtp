@@ -1,0 +1,4 @@
+(library
+ (name smtp_dkim)
+ (public_name smtpd.dkim)
+ (libraries smtp_dns str digestif mirage-crypto-pk x509 base64 unix))

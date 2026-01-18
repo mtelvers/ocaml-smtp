@@ -1,0 +1,4 @@
+(library
+ (name smtp_types)
+ (public_name smtpd.types)
+ (libraries))

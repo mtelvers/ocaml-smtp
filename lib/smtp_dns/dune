@@ -1,0 +1,4 @@
+(library
+ (name smtp_dns)
+ (public_name smtpd.dns)
+ (libraries unix str))

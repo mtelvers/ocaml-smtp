@@ -1,0 +1,10 @@
+(library
+ (name smtp_parser)
+ (public_name smtpd.parser)
+ (libraries smtp_types faraday base64))
+
+(menhir
+ (modules smtp_grammar)
+ (flags --explain))
+
+(ocamllex smtp_lexer)

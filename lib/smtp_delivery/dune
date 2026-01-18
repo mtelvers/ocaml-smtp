@@ -1,0 +1,4 @@
+(library
+ (name smtp_delivery)
+ (public_name smtpd.delivery)
+ (libraries smtp_types smtp_dns smtp_dkim unix str))

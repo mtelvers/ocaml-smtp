@@ -1,0 +1,4 @@
+(library
+ (name smtp_server)
+ (public_name smtpd.server)
+ (libraries smtp_types smtp_parser smtp_auth smtp_queue smtp_dns smtp_spf smtp_dkim smtp_dmarc eio eio_main tls-eio unix str))

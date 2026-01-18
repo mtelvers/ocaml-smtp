@@ -1,0 +1,4 @@
+(library
+ (name smtp_dmarc)
+ (public_name smtpd.dmarc)
+ (libraries smtp_dns smtp_spf smtp_dkim str))

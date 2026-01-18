@@ -1,0 +1,8 @@
+(library
+ (name smtp_auth)
+ (public_name smtpd.auth)
+ (foreign_stubs
+  (language c)
+  (names pam_stubs)
+  (flags (:standard)))
+ (c_library_flags (-lpam)))

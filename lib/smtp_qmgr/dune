@@ -1,0 +1,4 @@
+(library
+ (name smtp_qmgr)
+ (public_name smtpd.qmgr)
+ (libraries smtp_types smtp_queue smtp_delivery smtp_dkim eio eio_main unix))

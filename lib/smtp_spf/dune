@@ -1,0 +1,4 @@
+(library
+ (name smtp_spf)
+ (public_name smtpd.spf)
+ (libraries smtp_dns smtp_types str))

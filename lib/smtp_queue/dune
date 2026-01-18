@@ -1,0 +1,4 @@
+(library
+ (name smtp_queue)
+ (public_name smtpd.queue)
+ (libraries smtp_types unix))
