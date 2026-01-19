@@ -32,6 +32,7 @@ type mail_param =
   | Size of int64                                    (** RFC 1870 SIZE extension *)
   | Body of [ `SevenBit | `EightBitMime | `BinaryMime ]  (** RFC 6152 8BITMIME *)
   | Auth_param of email_address option               (** RFC 4954 AUTH parameter *)
+  | Unknown_param of string * string option          (** Unknown parameters - ignored *)
 
 (** RCPT TO parameters - RFC 5321 Section 4.1.1.3 *)
 type rcpt_param =

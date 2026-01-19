@@ -97,6 +97,22 @@ mail_param:
   | BODY EQUALS SEVENBIT            { Body `SevenBit }
   | BODY EQUALS EIGHTBITMIME        { Body `EightBitMime }
   | BODY EQUALS BINARYMIME          { Body `BinaryMime }
+  (* Accept unknown parameters - common ones from Postfix/other MTAs *)
+  | AUTH EQUALS param_value         { Unknown_param ("AUTH", None) }
+  | DOMAIN EQUALS param_value       { Unknown_param ("", None) }  (* Catch generic KEY=VALUE *)
+  | TEXT EQUALS param_value         { Unknown_param ("", None) }
+  | DOMAIN                          { Unknown_param ("", None) }  (* Catch FLAGS like SMTPUTF8 *)
+  | TEXT                            { Unknown_param ("", None) }
+  ;
+
+param_value:
+  | NULL_SENDER                     { () }
+  | LANGLE RANGLE                   { () }
+  | LANGLE lp = local_part AT d = domain RANGLE { ignore (lp, d) }
+  | DOMAIN                          { () }
+  | TEXT                            { () }
+  | LOCAL_PART                      { () }
+  | NUMBER                          { () }
   ;
 
 rcpt_params:
