@@ -57,16 +57,16 @@ module Maildir = struct
     | exn ->
       Error (Printexc.to_string exn)
 
-  (** Get Maildir path for a local user.
-      Returns ~/Maildir for the user. *)
+  (** Get Maildir path and user info for a local user.
+      Returns (~/Maildir, uid, gid) for the user. *)
   let maildir_for_user username =
     try
       let pw = Unix.getpwnam username in
-      Ok (Filename.concat pw.Unix.pw_dir "Maildir")
+      Ok (Filename.concat pw.Unix.pw_dir "Maildir", pw.Unix.pw_uid, pw.Unix.pw_gid)
     with Not_found ->
       Error (Printf.sprintf "User not found: %s" username)
 
-  (** Get Maildir path for an email address.
+  (** Get Maildir path and user info for an email address.
       Extracts local part and looks up system user. *)
   let maildir_for_address addr =
     maildir_for_user addr.local_part
@@ -74,9 +74,11 @@ module Maildir = struct
   (** Deliver a message to a local Maildir.
 
       @param maildir_path Path to Maildir (e.g., /home/user/Maildir)
+      @param uid User ID for file ownership
+      @param gid Group ID for file ownership
       @param message The message content (with headers)
       @return Ok filename on success, Error message on failure *)
-  let deliver ~maildir_path ~message =
+  let deliver ~maildir_path ~uid ~gid ~message =
     match ensure_maildir maildir_path with
     | Error e -> Error e
     | Ok () ->
@@ -89,6 +91,9 @@ module Maildir = struct
         let oc = open_out_bin tmp_path in
         output_string oc message;
         close_out oc;
+
+        (* Set ownership to destination user *)
+        Unix.chown tmp_path uid gid;
 
         (* Atomic move to new *)
         Unix.rename tmp_path new_path;
@@ -108,18 +113,18 @@ module Maildir = struct
   let deliver_message ~recipient ~msg =
     match maildir_for_address recipient with
     | Error e -> Failed e
-    | Ok maildir_path ->
+    | Ok (maildir_path, uid, gid) ->
       (* Build the message with delivery headers *)
       let delivered_to = Printf.sprintf "Delivered-To: %s\r\n" (email_to_string recipient) in
       let return_path = Printf.sprintf "Return-Path: <%s>\r\n"
           (match msg.sender with Some s -> email_to_string s | None -> "") in
       let message = return_path ^ delivered_to ^ msg.data in
 
-      match deliver ~maildir_path ~message with
+      match deliver ~maildir_path ~uid ~gid ~message with
       | Ok _filename -> Delivered
       | Error e ->
         (* Check if it's a temporary or permanent failure *)
-        if String.sub e 0 5 = "ENOSP" || String.sub e 0 5 = "EDQUO" then
+        if String.length e >= 5 && (String.sub e 0 5 = "ENOSP" || String.sub e 0 5 = "EDQUO") then
           Deferred e  (* Disk full, quota - retry later *)
         else
           Failed e

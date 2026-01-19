@@ -5,7 +5,3 @@
 (executable
  (name debug_parser)
  (libraries smtp_parser))
-
-(executable
- (name debug_lex)
- (libraries smtp_parser))

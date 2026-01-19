@@ -26,20 +26,22 @@ module Maildir : sig
       Creates {new,cur,tmp} subdirectories. *)
   val ensure_maildir : string -> (unit, string) result
 
-  (** Get Maildir path for a local user.
-      @return ~/Maildir for the user *)
-  val maildir_for_user : string -> (string, string) result
+  (** Get Maildir path and user info for a local user.
+      @return (~/Maildir, uid, gid) for the user *)
+  val maildir_for_user : string -> (string * int * int, string) result
 
-  (** Get Maildir path for an email address.
+  (** Get Maildir path and user info for an email address.
       Looks up user by local part. *)
-  val maildir_for_address : Smtp_types.email_address -> (string, string) result
+  val maildir_for_address : Smtp_types.email_address -> (string * int * int, string) result
 
   (** Deliver a message to a Maildir.
 
       @param maildir_path Path to Maildir (e.g., /home/user/Maildir)
+      @param uid User ID for file ownership
+      @param gid Group ID for file ownership
       @param message The message content (with headers)
       @return Ok filename on success *)
-  val deliver : maildir_path:string -> message:string -> (string, string) result
+  val deliver : maildir_path:string -> uid:int -> gid:int -> message:string -> (string, string) result
 
   (** Deliver a queued message to a local recipient. *)
   val deliver_message :
