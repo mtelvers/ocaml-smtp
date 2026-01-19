@@ -19,8 +19,9 @@ let local_char = ['a'-'z' 'A'-'Z' '0'-'9' '!' '#' '$' '%' '&' '\'' '*' '+' '-' '
 (* Characters allowed in domain labels *)
 let domain_char = ['a'-'z' 'A'-'Z' '0'-'9' '-']
 
-(* For AUTH initial response - base64 characters *)
-let base64_char = ['a'-'z' 'A'-'Z' '0'-'9' '+' '/' '=']
+(* For AUTH initial response - base64 characters
+   Note: '=' is handled separately as EQUALS token to allow proper parameter parsing *)
+let base64_char = ['a'-'z' 'A'-'Z' '0'-'9' '+' '/']
 
 rule token = parse
   (* Whitespace - significant in some contexts *)

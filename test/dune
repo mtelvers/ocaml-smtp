@@ -1,3 +1,11 @@
 (test
  (name test_smtp)
  (libraries smtp_types smtp_parser smtp_auth smtp_queue smtp_dns smtp_spf smtp_dkim smtp_dmarc smtp_delivery smtp_qmgr alcotest unix mirage-crypto-pk mirage-crypto-rng mirage-crypto-rng.unix x509))
+
+(executable
+ (name debug_parser)
+ (libraries smtp_parser))
+
+(executable
+ (name debug_lex)
+ (libraries smtp_parser))

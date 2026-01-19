@@ -128,11 +128,18 @@ auth_mechanism:
   ;
 
 base64_value:
-  | b = BASE64      { b }
-  | t = TEXT        { t }
-  | d = DOMAIN      { d }
-  | lp = LOCAL_PART { lp }
-  | EQUALS          { "=" }  (* Single = is valid base64 padding *)
+  | b = BASE64 p = base64_padding   { b ^ p }
+  | d = DOMAIN p = base64_padding   { d ^ p }  (* Domain chars overlap with base64 *)
+  | lp = LOCAL_PART p = base64_padding { lp ^ p }
+  | t = TEXT                        { t }
+  | EQUALS                          { "=" }  (* Single = padding only *)
+  | EQUALS EQUALS                   { "==" } (* Double = padding only *)
+  ;
+
+base64_padding:
+  | (* empty *)       { "" }
+  | EQUALS            { "=" }
+  | EQUALS EQUALS     { "==" }
   ;
 
 text_arg:
