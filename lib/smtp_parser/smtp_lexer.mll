@@ -12,8 +12,9 @@ let digit = ['0'-'9']
 let alpha = ['a'-'z' 'A'-'Z']
 let alphanum = ['a'-'z' 'A'-'Z' '0'-'9']
 
-(* Characters allowed in local part (simplified) *)
-let local_char = ['a'-'z' 'A'-'Z' '0'-'9' '!' '#' '$' '%' '&' '\'' '*' '+' '-' '/' '=' '?' '^' '_' '`' '{' '|' '}' '~' '.']
+(* Characters allowed in local part (simplified)
+   Note: '=' is excluded to allow proper parsing of ESMTP parameters like SIZE=1234 *)
+let local_char = ['a'-'z' 'A'-'Z' '0'-'9' '!' '#' '$' '%' '&' '\'' '*' '+' '-' '/' '?' '^' '_' '`' '{' '|' '}' '~' '.']
 
 (* Characters allowed in domain labels *)
 let domain_char = ['a'-'z' 'A'-'Z' '0'-'9' '-']
