@@ -632,5 +632,14 @@ let sign_message ~config ~message =
   match sign ~config ~headers ~body with
   | Error msg -> Error msg
   | Ok dkim_header ->
+    (* Debug: log the DKIM header with escapes *)
+    Printf.eprintf "DKIM-DEBUG: Generated header (%d bytes):\n" (String.length dkim_header);
+    String.iter (fun c ->
+      if c = '\r' then Printf.eprintf "\\r"
+      else if c = '\n' then Printf.eprintf "\\n"
+      else if c = '\t' then Printf.eprintf "\\t"
+      else Printf.eprintf "%c" c
+    ) dkim_header;
+    Printf.eprintf "\n%!";
     (* Prepend DKIM-Signature to message *)
     Ok (dkim_header ^ "\r\n" ^ message)
