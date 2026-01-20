@@ -557,6 +557,20 @@ let sign ~config ~headers ~body =
     let body_hash = compute_body_hash config.sign_algorithm canon_body in
     let body_hash_b64 = Base64.encode_string body_hash in
 
+    (* Debug: log body hash computation *)
+    Printf.eprintf "[DKIM] Original body length: %d bytes\n%!" (String.length body);
+    Printf.eprintf "[DKIM] Canonicalized body length: %d bytes\n%!" (String.length canon_body);
+    Printf.eprintf "[DKIM] Body hash (base64): %s\n%!" body_hash_b64;
+    (* Log first 200 chars of canonicalized body in escaped form *)
+    let preview_len = min 200 (String.length canon_body) in
+    let preview = String.sub canon_body 0 preview_len in
+    let escaped = String.concat "" (List.map (fun c ->
+      let c = Char.code (String.get preview c) in
+      if c = 13 then "\\r" else if c = 10 then "\\n" else if c < 32 || c > 126 then Printf.sprintf "\\x%02x" c
+      else String.make 1 (Char.chr c)
+    ) (List.init preview_len Fun.id)) in
+    Printf.eprintf "[DKIM] Canonicalized body preview: %s\n%!" escaped;
+
     (* Get current timestamp *)
     let timestamp = Int64.of_float (Unix.time ()) in
 

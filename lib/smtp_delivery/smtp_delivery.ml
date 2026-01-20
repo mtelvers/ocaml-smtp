@@ -263,17 +263,40 @@ module Remote = struct
 
                    (* Send message body *)
                    (* Dot-stuff lines starting with . *)
+                   Printf.eprintf "[DELIVERY] Sending message, total length: %d bytes\n%!" (String.length message);
                    let lines = String.split_on_char '\n' message in
+                   Printf.eprintf "[DELIVERY] Split into %d lines\n%!" (List.length lines);
+                   let sent_body = Buffer.create 1024 in
+                   let in_body = ref false in
                    List.iter (fun line ->
                      (* Strip trailing CR if present (from CRLF line endings) *)
                      let line = if String.length line > 0 && line.[String.length line - 1] = '\r'
                        then String.sub line 0 (String.length line - 1) else line in
+                     (* Track when we enter the body (after blank line) *)
+                     if !in_body then begin
+                       Buffer.add_string sent_body line;
+                       Buffer.add_string sent_body "\r\n"
+                     end else if line = "" then
+                       in_body := true;
                      let line = if String.length line > 0 && line.[0] = '.' then "." ^ line else line in
                      output_string oc line;
                      output_string oc "\r\n"
                    ) lines;
                    output_string oc ".\r\n";
                    flush oc;
+                   (* Log the body that was actually sent *)
+                   let body_sent = Buffer.contents sent_body in
+                   Printf.eprintf "[DELIVERY] Body sent length: %d bytes\n%!" (String.length body_sent);
+                   let preview_len = min 200 (String.length body_sent) in
+                   if preview_len > 0 then begin
+                     let preview = String.sub body_sent 0 preview_len in
+                     let escaped = String.concat "" (List.map (fun i ->
+                       let c = Char.code preview.[i] in
+                       if c = 13 then "\\r" else if c = 10 then "\\n" else if c < 32 || c > 126 then Printf.sprintf "\\x%02x" c
+                       else String.make 1 (Char.chr c)
+                     ) (List.init preview_len Fun.id)) in
+                     Printf.eprintf "[DELIVERY] Body sent preview: %s\n%!" escaped
+                   end;
 
                    (* Read final response *)
                    match read_response ic with
