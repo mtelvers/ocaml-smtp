@@ -265,6 +265,11 @@ module Remote = struct
                    (* Dot-stuff lines starting with . *)
                    Printf.eprintf "[DELIVERY] Sending message, total length: %d bytes\n%!" (String.length message);
                    let lines = String.split_on_char '\n' message in
+                   (* Remove trailing empty string that results from splitting a message ending with \n *)
+                   let lines = match List.rev lines with
+                     | "" :: rest -> List.rev rest
+                     | _ -> lines
+                   in
                    Printf.eprintf "[DELIVERY] Split into %d lines\n%!" (List.length lines);
                    let sent_body = Buffer.create 1024 in
                    let in_body = ref false in
