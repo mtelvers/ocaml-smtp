@@ -557,18 +557,6 @@ let sign ~config ~headers ~body =
     let body_hash = compute_body_hash config.sign_algorithm canon_body in
     let body_hash_b64 = Base64.encode_string body_hash in
 
-    (* Debug: log body hash computation *)
-    Printf.eprintf "[DKIM] Original body length: %d bytes\n%!" (String.length body);
-    Printf.eprintf "[DKIM] Canonicalized body length: %d bytes\n%!" (String.length canon_body);
-    Printf.eprintf "[DKIM] Body hash (base64): %s\n%!" body_hash_b64;
-    (* Log hex dump of canonicalized body *)
-    let hex_dump s =
-      String.concat " " (List.init (String.length s) (fun i ->
-        Printf.sprintf "%02x" (Char.code s.[i])
-      ))
-    in
-    Printf.eprintf "[DKIM] Canonicalized body hex: %s\n%!" (hex_dump canon_body);
-
     (* Get current timestamp *)
     let timestamp = Int64.of_float (Unix.time ()) in
 
@@ -616,9 +604,7 @@ let sign ~config ~headers ~body =
     | Ok signature ->
       let signature_b64 = Base64.encode_string signature in
       let full_header = "DKIM-Signature: " ^ dkim_header_template ^ signature_b64 in
-      let folded = fold_header_line full_header in
-      Printf.eprintf "[DKIM] Generated header: %s\n%!" (String.escaped folded);
-      Ok folded
+      Ok (fold_header_line full_header)
   end
 
 (** Sign a complete message and return message with DKIM-Signature prepended *)

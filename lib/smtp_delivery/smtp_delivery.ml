@@ -263,45 +263,22 @@ module Remote = struct
 
                    (* Send message body *)
                    (* Dot-stuff lines starting with . *)
-                   Printf.eprintf "[DELIVERY] Sending message, total length: %d bytes\n%!" (String.length message);
-                   (* Log escaped first 500 chars of message *)
-                   let preview_len = min 500 (String.length message) in
-                   Printf.eprintf "[DELIVERY] Message preview: %s\n%!" (String.escaped (String.sub message 0 preview_len));
                    let lines = String.split_on_char '\n' message in
                    (* Remove trailing empty string that results from splitting a message ending with \n *)
                    let lines = match List.rev lines with
                      | "" :: rest -> List.rev rest
                      | _ -> lines
                    in
-                   Printf.eprintf "[DELIVERY] Split into %d lines\n%!" (List.length lines);
-                   let sent_body = Buffer.create 1024 in
-                   let in_body = ref false in
                    List.iter (fun line ->
                      (* Strip trailing CR if present (from CRLF line endings) *)
                      let line = if String.length line > 0 && line.[String.length line - 1] = '\r'
                        then String.sub line 0 (String.length line - 1) else line in
-                     (* Track when we enter the body (after blank line) *)
-                     if !in_body then begin
-                       Buffer.add_string sent_body line;
-                       Buffer.add_string sent_body "\r\n"
-                     end else if line = "" then
-                       in_body := true;
                      let line = if String.length line > 0 && line.[0] = '.' then "." ^ line else line in
                      output_string oc line;
                      output_string oc "\r\n"
                    ) lines;
                    output_string oc ".\r\n";
                    flush oc;
-                   (* Log the body that was actually sent *)
-                   let body_sent = Buffer.contents sent_body in
-                   Printf.eprintf "[DELIVERY] Body sent length: %d bytes\n%!" (String.length body_sent);
-                   (* Log hex dump of body sent *)
-                   let hex_dump s =
-                     String.concat " " (List.init (String.length s) (fun i ->
-                       Printf.sprintf "%02x" (Char.code s.[i])
-                     ))
-                   in
-                   Printf.eprintf "[DELIVERY] Body sent hex: %s\n%!" (hex_dump body_sent);
 
                    (* Read final response *)
                    match read_response ic with
