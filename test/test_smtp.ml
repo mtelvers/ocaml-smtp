@@ -502,6 +502,211 @@ let test_dkim_sign_and_verify_hash () =
        with Not_found ->
          fail "no bh= in signature")
 
+(** Test header folding doesn't corrupt h= tag values *)
+
+let test_dkim_header_folding_preserves_header_names () =
+  Mirage_crypto_rng_unix.use_default ();
+  let key = Mirage_crypto_pk.Rsa.generate ~bits:2048 () in
+  let key_pem = X509.Private_key.encode_pem (`RSA key) in
+
+  (* Use a long list of headers that would trigger folding *)
+  let headers = ["from"; "to"; "subject"; "date"; "message-id";
+                 "mime-version"; "content-type"; "content-transfer-encoding"] in
+
+  match Smtp_dkim.create_signing_config
+      ~private_key_pem:key_pem
+      ~domain:"example.com"
+      ~selector:"test"
+      ~headers
+      () with
+  | Error msg -> fail ("Failed to create config: " ^ msg)
+  | Ok config ->
+    let message = "From: test@example.com\r\n\
+                   To: recipient@example.org\r\n\
+                   Subject: Test\r\n\
+                   Date: Mon, 1 Jan 2024 00:00:00 +0000\r\n\
+                   Message-ID: <test@example.com>\r\n\
+                   MIME-Version: 1.0\r\n\
+                   Content-Type: text/plain\r\n\
+                   Content-Transfer-Encoding: 7bit\r\n\
+                   \r\n\
+                   Test body.\r\n" in
+
+    match Smtp_dkim.sign_message ~config ~message with
+    | Error msg -> fail ("Failed to sign: " ^ msg)
+    | Ok signed ->
+      (* Verify the h= tag contains all headers without corruption *)
+      (* After unfolding, should contain "content-transfer-encoding" not split *)
+      let unfolded = Str.global_replace (Str.regexp "\r\n[ \t]+") " " signed in
+      check bool "contains content-transfer-encoding intact" true
+        (try let _ = Str.search_forward
+           (Str.regexp "content-transfer-encoding") unfolded 0 in true
+         with Not_found -> false);
+      (* Also verify no header name is split by checking for common corruption patterns *)
+      check bool "no -encoding alone" true
+        (try let _ = Str.search_forward (Str.regexp "[ \t]-encoding") signed 0 in false
+         with Not_found -> true);
+      check bool "no -type alone" true
+        (try let _ = Str.search_forward (Str.regexp "[ \t]-type") signed 0 in false
+         with Not_found -> true)
+
+(** Test that DKIM folds only happen after semicolons *)
+let test_dkim_folds_only_at_semicolons () =
+  Mirage_crypto_rng_unix.use_default ();
+  let key = Mirage_crypto_pk.Rsa.generate ~bits:2048 () in
+  let key_pem = X509.Private_key.encode_pem (`RSA key) in
+
+  match Smtp_dkim.create_signing_config
+      ~private_key_pem:key_pem
+      ~domain:"example.com"
+      ~selector:"test"
+      () with
+  | Error msg -> fail ("Failed to create config: " ^ msg)
+  | Ok config ->
+    let message = "From: test@example.com\r\n\
+                   Subject: Test\r\n\
+                   Date: Mon, 1 Jan 2024 00:00:00 +0000\r\n\
+                   \r\n\
+                   Test body.\r\n" in
+
+    match Smtp_dkim.sign_message ~config ~message with
+    | Error msg -> fail ("Failed to sign: " ^ msg)
+    | Ok signed ->
+      (* Extract just the DKIM-Signature header *)
+      let header_end =
+        try Str.search_forward (Str.regexp "\r\nFrom:") signed 0
+        with Not_found -> String.length signed
+      in
+      let dkim_header = String.sub signed 0 header_end in
+
+      (* Check that every fold (CRLF + whitespace) is preceded by a semicolon *)
+      let fold_positions = ref [] in
+      let i = ref 0 in
+      while !i < String.length dkim_header - 2 do
+        if dkim_header.[!i] = '\r' && dkim_header.[!i + 1] = '\n' &&
+           !i + 2 < String.length dkim_header &&
+           (dkim_header.[!i + 2] = ' ' || dkim_header.[!i + 2] = '\t') then
+          fold_positions := !i :: !fold_positions;
+        incr i
+      done;
+
+      (* Each fold position should be preceded by a semicolon (possibly with space) *)
+      List.iter (fun pos ->
+        let preceding = String.sub dkim_header (max 0 (pos - 5)) (min 5 pos) in
+        check bool (Printf.sprintf "fold at %d preceded by semicolon" pos) true
+          (String.contains preceding ';')
+      ) !fold_positions
+
+(** Test that hyphenated header names survive folding *)
+let test_dkim_hyphenated_headers_intact () =
+  Mirage_crypto_rng_unix.use_default ();
+  let key = Mirage_crypto_pk.Rsa.generate ~bits:2048 () in
+  let key_pem = X509.Private_key.encode_pem (`RSA key) in
+
+  (* Headers with hyphens that could be corrupted by bad folding *)
+  let headers = ["from"; "to"; "subject"; "date"; "message-id";
+                 "mime-version"; "content-type"; "content-transfer-encoding";
+                 "x-custom-header"; "x-another-long-custom-header"] in
+
+  match Smtp_dkim.create_signing_config
+      ~private_key_pem:key_pem
+      ~domain:"example.com"
+      ~selector:"test"
+      ~headers
+      () with
+  | Error msg -> fail ("Failed to create config: " ^ msg)
+  | Ok config ->
+    let message = "From: test@example.com\r\n\
+                   To: recipient@example.org\r\n\
+                   Subject: Test\r\n\
+                   Date: Mon, 1 Jan 2024 00:00:00 +0000\r\n\
+                   Message-ID: <test@example.com>\r\n\
+                   MIME-Version: 1.0\r\n\
+                   Content-Type: text/plain\r\n\
+                   Content-Transfer-Encoding: 7bit\r\n\
+                   X-Custom-Header: value\r\n\
+                   X-Another-Long-Custom-Header: value\r\n\
+                   \r\n\
+                   Test body.\r\n" in
+
+    match Smtp_dkim.sign_message ~config ~message with
+    | Error msg -> fail ("Failed to sign: " ^ msg)
+    | Ok signed ->
+      (* Unfold and check all hyphenated headers are intact *)
+      let unfolded = Str.global_replace (Str.regexp "\r\n[ \t]+") "" signed in
+
+      (* Check each header name is present and not split *)
+      let check_header name =
+        check bool (name ^ " intact") true
+          (try let _ = Str.search_forward (Str.regexp name) unfolded 0 in true
+           with Not_found -> false)
+      in
+      check_header "content-transfer-encoding";
+      check_header "content-type";
+      check_header "mime-version";
+      check_header "message-id";
+      check_header "x-custom-header";
+      check_header "x-another-long-custom-header"
+
+(** Test that folded DKIM signature can still be parsed *)
+let test_dkim_folded_signature_parseable () =
+  Mirage_crypto_rng_unix.use_default ();
+  let key = Mirage_crypto_pk.Rsa.generate ~bits:2048 () in
+  let key_pem = X509.Private_key.encode_pem (`RSA key) in
+
+  match Smtp_dkim.create_signing_config
+      ~private_key_pem:key_pem
+      ~domain:"example.com"
+      ~selector:"test"
+      () with
+  | Error msg -> fail ("Failed to create config: " ^ msg)
+  | Ok config ->
+    let message = "From: test@example.com\r\n\
+                   Subject: Test\r\n\
+                   \r\n\
+                   Test body.\r\n" in
+
+    match Smtp_dkim.sign_message ~config ~message with
+    | Error msg -> fail ("Failed to sign: " ^ msg)
+    | Ok signed ->
+      (* Unfold the signature (as a receiver would) *)
+      let unfolded = Str.global_replace (Str.regexp "\r\n[ \t]+") " " signed in
+
+      (* Extract the DKIM-Signature value *)
+      (try
+         let start = Str.search_forward (Str.regexp "DKIM-Signature:[ ]*") unfolded 0 in
+         let value_start = start + String.length (Str.matched_string unfolded) in
+         let value_end =
+           try Str.search_forward (Str.regexp "\r\n[^ \t]") unfolded value_start
+           with Not_found -> String.length unfolded
+         in
+         let dkim_value = String.sub unfolded value_start (value_end - value_start) in
+
+         (* Check all required tags are present and parseable *)
+         check bool "has v=" true (String.length dkim_value > 0 &&
+           (try let _ = Str.search_forward (Str.regexp "v=1") dkim_value 0 in true
+            with Not_found -> false));
+         check bool "has a=" true
+           (try let _ = Str.search_forward (Str.regexp "a=rsa-sha256") dkim_value 0 in true
+            with Not_found -> false);
+         check bool "has d=" true
+           (try let _ = Str.search_forward (Str.regexp "d=example\\.com") dkim_value 0 in true
+            with Not_found -> false);
+         check bool "has s=" true
+           (try let _ = Str.search_forward (Str.regexp "s=test") dkim_value 0 in true
+            with Not_found -> false);
+         check bool "has h=" true
+           (try let _ = Str.search_forward (Str.regexp "h=") dkim_value 0 in true
+            with Not_found -> false);
+         check bool "has bh=" true
+           (try let _ = Str.search_forward (Str.regexp "bh=") dkim_value 0 in true
+            with Not_found -> false);
+         check bool "has b=" true
+           (try let _ = Str.search_forward (Str.regexp "b=") dkim_value 0 in true
+            with Not_found -> false)
+       with Not_found ->
+         fail "DKIM-Signature header not found")
+
 let dkim_tests = [
   "result to string", `Quick, test_dkim_result_to_string;
   "format auth results", `Quick, test_dkim_format_auth_results;
@@ -519,6 +724,10 @@ let dkim_tests = [
   "body hash hi", `Quick, test_dkim_body_hash_hi;
   "body hash empty", `Quick, test_dkim_body_hash_empty;
   "sign and verify hash", `Quick, test_dkim_sign_and_verify_hash;
+  "header folding preserves names", `Quick, test_dkim_header_folding_preserves_header_names;
+  "folds only at semicolons", `Quick, test_dkim_folds_only_at_semicolons;
+  "hyphenated headers intact", `Quick, test_dkim_hyphenated_headers_intact;
+  "folded signature parseable", `Quick, test_dkim_folded_signature_parseable;
 ]
 
 (** {1 DMARC Tests} *)

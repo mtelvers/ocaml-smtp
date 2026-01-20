@@ -496,38 +496,36 @@ let rsa_sign key algorithm data =
     Ok signature
   with e -> Error ("Signing failed: " ^ Printexc.to_string e)
 
-(** Fold a long header line at 76 characters *)
+(** Fold a long header line for DKIM signatures.
+    Only breaks after semicolons to avoid corrupting tag values like header names.
+    This may result in lines longer than 76 chars, but RFC 6376 says folding
+    is a SHOULD not a MUST, and corrupted headers are worse than long lines. *)
 let fold_header_line line =
-  let max_len = 76 in
-  if String.length line <= max_len then line
-  else begin
-    let buf = Buffer.create (String.length line + 20) in
-    let rec fold pos =
-      if pos >= String.length line then ()
-      else begin
-        let remaining = String.length line - pos in
-        let chunk_len = min max_len remaining in
-        (* Try to break at a semicolon or space *)
-        let break_pos =
-          if remaining <= max_len then remaining
-          else
-            let search_start = pos in
-            let search_end = pos + chunk_len in
-            let rec find_break i =
-              if i <= search_start then chunk_len
-              else if line.[i] = ';' || line.[i] = ' ' then i - pos + 1
-              else find_break (i - 1)
-            in
-            find_break (search_end - 1)
-        in
-        if pos > 0 then Buffer.add_string buf "\r\n\t";
-        Buffer.add_substring buf line pos break_pos;
-        fold (pos + break_pos)
+  let buf = Buffer.create (String.length line + 50) in
+  let current_line_len = ref 0 in
+  let i = ref 0 in
+  while !i < String.length line do
+    let c = line.[!i] in
+    Buffer.add_char buf c;
+    incr current_line_len;
+    (* After a semicolon, check if we should fold *)
+    if c = ';' && !i + 1 < String.length line then begin
+      (* Look ahead to see how long until next semicolon or end *)
+      let next_semi = ref (String.length line) in
+      for j = !i + 1 to String.length line - 1 do
+        if line.[j] = ';' && !next_semi = String.length line then
+          next_semi := j
+      done;
+      let next_segment_len = !next_semi - !i in
+      (* If adding next segment would make line too long, fold here *)
+      if !current_line_len + next_segment_len > 76 then begin
+        Buffer.add_string buf "\r\n\t";
+        current_line_len := 1  (* Tab counts as 1 *)
       end
-    in
-    fold 0;
-    Buffer.contents buf
-  end
+    end;
+    incr i
+  done;
+  Buffer.contents buf
 
 (** Sign a message and return the DKIM-Signature header.
 
