@@ -382,11 +382,143 @@ let test_dkim_sign_message () =
       check bool "contains original" true
         (String.length signed > String.length message)
 
+(** Test body canonicalization - RFC 6376 Section 3.4 *)
+
+let test_dkim_body_canon_simple_basic () =
+  (* Simple canonicalization: keep body as-is, ensure CRLF at end *)
+  let body = "Hello World\r\n" in
+  let canon = Smtp_dkim.canonicalize_body Smtp_dkim.Simple body in
+  check string "simple canon preserves body" "Hello World\r\n" canon
+
+let test_dkim_body_canon_simple_trailing_lines () =
+  (* Simple canonicalization: remove trailing empty lines *)
+  let body = "Hello World\r\n\r\n\r\n" in
+  let canon = Smtp_dkim.canonicalize_body Smtp_dkim.Simple body in
+  check string "simple removes trailing empty lines" "Hello World\r\n" canon
+
+let test_dkim_body_canon_simple_no_trailing_crlf () =
+  (* Simple canonicalization: add CRLF if missing *)
+  let body = "Hello World" in
+  let canon = Smtp_dkim.canonicalize_body Smtp_dkim.Simple body in
+  check string "simple adds trailing CRLF" "Hello World\r\n" canon
+
+let test_dkim_body_canon_simple_lf_only () =
+  (* Simple canonicalization: normalize LF to CRLF *)
+  let body = "Hello World\n" in
+  let canon = Smtp_dkim.canonicalize_body Smtp_dkim.Simple body in
+  check string "simple normalizes LF to CRLF" "Hello World\r\n" canon
+
+let test_dkim_body_canon_relaxed_basic () =
+  (* Relaxed canonicalization: compress whitespace *)
+  let body = "Hello   World\r\n" in
+  let canon = Smtp_dkim.canonicalize_body Smtp_dkim.Relaxed body in
+  check string "relaxed compresses spaces" "Hello World\r\n" canon
+
+let test_dkim_body_canon_relaxed_trailing_ws () =
+  (* Relaxed canonicalization: remove trailing whitespace per line *)
+  let body = "Hello World   \r\n" in
+  let canon = Smtp_dkim.canonicalize_body Smtp_dkim.Relaxed body in
+  check string "relaxed removes trailing ws" "Hello World\r\n" canon
+
+let test_dkim_body_canon_relaxed_tabs () =
+  (* Relaxed canonicalization: compress tabs to space *)
+  let body = "Hello\t\tWorld\r\n" in
+  let canon = Smtp_dkim.canonicalize_body Smtp_dkim.Relaxed body in
+  check string "relaxed compresses tabs" "Hello World\r\n" canon
+
+let test_dkim_body_canon_empty () =
+  (* Empty body should be CRLF after canonicalization *)
+  let body = "" in
+  let canon_simple = Smtp_dkim.canonicalize_body Smtp_dkim.Simple body in
+  let canon_relaxed = Smtp_dkim.canonicalize_body Smtp_dkim.Relaxed body in
+  check string "empty body simple" "\r\n" canon_simple;
+  check string "empty body relaxed" "\r\n" canon_relaxed
+
+(** Test body hash computation *)
+
+let test_dkim_body_hash_known_value () =
+  (* Test with a known body and expected hash *)
+  (* "Test body.\r\n" -> SHA-256 -> base64 *)
+  Mirage_crypto_rng_unix.use_default ();
+  let body = "Test body.\r\n" in
+  let hash = Smtp_dkim.compute_body_hash Smtp_dkim.Rsa_sha256 body in
+  let hash_b64 = Base64.encode_string hash in
+  (* Verify against independently computed value *)
+  check string "body hash matches expected"
+    "Zaj1xnmWdyQqi2oEkVv+dl9g4SB9mOkf8GCD89iiWs0=" hash_b64
+
+let test_dkim_body_hash_hi () =
+  (* Test with "Hi\r\n" *)
+  Mirage_crypto_rng_unix.use_default ();
+  let body = "Hi\r\n" in
+  let hash = Smtp_dkim.compute_body_hash Smtp_dkim.Rsa_sha256 body in
+  let hash_b64 = Base64.encode_string hash in
+  check string "Hi body hash"
+    "j+uJ1+KwQjMpdNiCngwvlv2FTzZnzkokoCYASnN36NE=" hash_b64
+
+let test_dkim_body_hash_empty () =
+  (* Empty body (just CRLF) hash *)
+  Mirage_crypto_rng_unix.use_default ();
+  let body = "\r\n" in
+  let hash = Smtp_dkim.compute_body_hash Smtp_dkim.Rsa_sha256 body in
+  let hash_b64 = Base64.encode_string hash in
+  (* SHA-256 of "\r\n" is known *)
+  check string "empty body hash"
+    "frcCV1k9oG9oKj3dpUqdJg1PxRT2RSN/XKdLCPjaYaY=" hash_b64
+
+(** Test full signing flow with hash verification *)
+
+let test_dkim_sign_and_verify_hash () =
+  Mirage_crypto_rng_unix.use_default ();
+  let key = Mirage_crypto_pk.Rsa.generate ~bits:2048 () in
+  let key_pem = X509.Private_key.encode_pem (`RSA key) in
+
+  match Smtp_dkim.create_signing_config
+      ~private_key_pem:key_pem
+      ~domain:"example.com"
+      ~selector:"test"
+      () with
+  | Error msg -> fail ("Failed to create config: " ^ msg)
+  | Ok config ->
+    let message = "From: test@example.com\r\n\
+                   Subject: Test\r\n\
+                   \r\n\
+                   Test body.\r\n" in
+
+    match Smtp_dkim.sign_message ~config ~message with
+    | Error msg -> fail ("Failed to sign: " ^ msg)
+    | Ok signed ->
+      (* Extract bh= value from the signed message using Str *)
+      let bh_regex = Str.regexp "bh=\\([^;]*\\)" in
+      (try
+         let _ = Str.search_forward bh_regex signed 0 in
+         let bh_value = Str.matched_group 1 signed in
+
+         (* Compute expected hash for "Test body.\r\n" *)
+         let expected_hash = Smtp_dkim.compute_body_hash Smtp_dkim.Rsa_sha256 "Test body.\r\n" in
+         let expected_b64 = Base64.encode_string expected_hash in
+
+         check string "bh= matches computed hash" expected_b64 bh_value
+       with Not_found ->
+         fail "no bh= in signature")
+
 let dkim_tests = [
   "result to string", `Quick, test_dkim_result_to_string;
   "format auth results", `Quick, test_dkim_format_auth_results;
   "verify no signature", `Quick, test_dkim_verify_no_signature;
   "sign message", `Quick, test_dkim_sign_message;
+  "body canon simple basic", `Quick, test_dkim_body_canon_simple_basic;
+  "body canon simple trailing lines", `Quick, test_dkim_body_canon_simple_trailing_lines;
+  "body canon simple no trailing crlf", `Quick, test_dkim_body_canon_simple_no_trailing_crlf;
+  "body canon simple lf only", `Quick, test_dkim_body_canon_simple_lf_only;
+  "body canon relaxed basic", `Quick, test_dkim_body_canon_relaxed_basic;
+  "body canon relaxed trailing ws", `Quick, test_dkim_body_canon_relaxed_trailing_ws;
+  "body canon relaxed tabs", `Quick, test_dkim_body_canon_relaxed_tabs;
+  "body canon empty", `Quick, test_dkim_body_canon_empty;
+  "body hash known value", `Quick, test_dkim_body_hash_known_value;
+  "body hash hi", `Quick, test_dkim_body_hash_hi;
+  "body hash empty", `Quick, test_dkim_body_hash_empty;
+  "sign and verify hash", `Quick, test_dkim_sign_and_verify_hash;
 ]
 
 (** {1 DMARC Tests} *)

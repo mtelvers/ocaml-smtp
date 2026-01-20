@@ -3,6 +3,30 @@
     DomainKeys Identified Mail signature verification and signing to confirm
     that an email was authorized by the domain owner. *)
 
+(** {1 Types} *)
+
+(** DKIM signature algorithm *)
+type algorithm =
+  | Rsa_sha256
+  | Rsa_sha1
+
+(** Canonicalization method *)
+type canonicalization = Simple | Relaxed
+
+(** {1 Canonicalization} *)
+
+(** Canonicalize message body according to RFC 6376.
+    @param canon Canonicalization method (Simple or Relaxed)
+    @param body The message body
+    @return Canonicalized body *)
+val canonicalize_body : canonicalization -> string -> string
+
+(** Compute body hash.
+    @param algorithm Hash algorithm (Rsa_sha256 or Rsa_sha1)
+    @param body Canonicalized body
+    @return Raw hash bytes *)
+val compute_body_hash : algorithm -> string -> string
+
 (** {1 Verification} *)
 
 (** DKIM verification result *)
