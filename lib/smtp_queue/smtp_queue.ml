@@ -270,6 +270,9 @@ end = struct
       Error (Storage_error (Printexc.to_string exn))
 
   let dequeue t =
+    (* If index is empty, rescan directory for new files *)
+    let index = if t.index = [] then load_existing t.base_path else t.index in
+    t.index <- index;
     match t.index with
     | [] -> None
     | (id, path) :: rest ->
