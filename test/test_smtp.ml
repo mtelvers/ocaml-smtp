@@ -426,6 +426,18 @@ let test_dkim_body_canon_relaxed_tabs () =
   let canon = Smtp_dkim.canonicalize_body Smtp_dkim.Relaxed body in
   check string "relaxed compresses tabs" "Hello World\r\n" canon
 
+let test_dkim_body_canon_relaxed_leading_ws () =
+  (* RFC 6376: Only remove TRAILING whitespace, NOT leading!
+     This is critical for DKIM verification to match. *)
+  let body = "  Hello World\r\n" in
+  let canon = Smtp_dkim.canonicalize_body Smtp_dkim.Relaxed body in
+  (* Leading space should be compressed to single space but preserved *)
+  check string "relaxed preserves leading ws" " Hello World\r\n" canon;
+  (* More complex case: leading and trailing *)
+  let body2 = "  Content here   \r\n" in
+  let canon2 = Smtp_dkim.canonicalize_body Smtp_dkim.Relaxed body2 in
+  check string "relaxed: leading kept, trailing removed" " Content here\r\n" canon2
+
 let test_dkim_body_canon_empty () =
   (* Empty body should be CRLF after canonicalization *)
   let body = "" in
@@ -719,6 +731,7 @@ let dkim_tests = [
   "body canon relaxed basic", `Quick, test_dkim_body_canon_relaxed_basic;
   "body canon relaxed trailing ws", `Quick, test_dkim_body_canon_relaxed_trailing_ws;
   "body canon relaxed tabs", `Quick, test_dkim_body_canon_relaxed_tabs;
+  "body canon relaxed leading ws", `Quick, test_dkim_body_canon_relaxed_leading_ws;
   "body canon empty", `Quick, test_dkim_body_canon_empty;
   "body hash known value", `Quick, test_dkim_body_hash_known_value;
   "body hash hi", `Quick, test_dkim_body_hash_hi;

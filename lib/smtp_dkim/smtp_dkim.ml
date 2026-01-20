@@ -175,6 +175,18 @@ let canon_body_simple body =
   if lines = [] then "\r\n"
   else String.concat "\r\n" lines ^ "\r\n"
 
+(** Remove trailing whitespace from a string (RFC 6376 requires only trailing) *)
+let rtrim s =
+  let len = String.length s in
+  if len = 0 then s
+  else
+    let rec find_end i =
+      if i < 0 then 0
+      else if s.[i] = ' ' || s.[i] = '\t' then find_end (i - 1)
+      else i + 1
+    in
+    String.sub s 0 (find_end (len - 1))
+
 (** Relaxed canonicalization for body - RFC 6376 Section 3.4.4 *)
 let canon_body_relaxed body =
   (* Normalize line endings first *)
@@ -183,8 +195,8 @@ let canon_body_relaxed body =
   let lines = List.map (fun line ->
     (* Replace sequences of WSP with single space *)
     let line = Str.global_replace (Str.regexp "[ \t]+") " " line in
-    (* Remove trailing whitespace *)
-    String.trim line
+    (* Remove trailing whitespace only - RFC 6376 says trailing, not leading *)
+    rtrim line
   ) lines in
   (* Remove trailing empty lines *)
   let rec remove_trailing = function
@@ -501,13 +513,6 @@ let rsa_sign key algorithm data =
     This may result in lines longer than 76 chars, but RFC 6376 says folding
     is a SHOULD not a MUST, and corrupted headers are worse than long lines. *)
 let fold_header_line line =
-  (* Write to debug file to confirm this function is called *)
-  (try
-    let oc = open_out_gen [Open_creat; Open_append; Open_text] 0o644 "/tmp/fold_debug.log" in
-    Printf.fprintf oc "fold_header_line called at %f\n" (Unix.gettimeofday ());
-    Printf.fprintf oc "Input length: %d\n" (String.length line);
-    close_out oc
-  with _ -> ());
   let buf = Buffer.create (String.length line + 50) in
   let current_line_len = ref 0 in
   let i = ref 0 in
