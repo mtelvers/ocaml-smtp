@@ -41,7 +41,7 @@ let parse_ipaddr host =
     | _ -> Eio.Net.Ipaddr.V4.loopback
 
 (* Run the server with memory queue - single process mode *)
-let run_single ~port ~host ~tls_config ~implicit_tls ~local_domains ~require_auth ~dkim_config =
+let run_single_memory ~port ~host ~tls_config ~implicit_tls ~local_domains ~require_auth ~dkim_config =
   let module Server = Smtp_server.Make(Smtp_queue.Memory_queue)(Smtp_auth.Pam_auth) in
   let module Qmgr = Smtp_qmgr.Make(Smtp_queue.Memory_queue) in
   Eio_main.run @@ fun env ->
@@ -62,6 +62,44 @@ let run_single ~port ~host ~tls_config ~implicit_tls ~local_domains ~require_aut
   let tls_mode = if implicit_tls then " (implicit TLS)"
     else if tls_config <> None then " (STARTTLS available)" else "" in
   Eio.traceln "SMTP server starting on %s:%d (memory queue, single-process)%s" host port tls_mode;
+  Eio.traceln "Local domains: %s" (String.concat ", " local_domains);
+  Eio.traceln "Relay policy: %s" (if require_auth then "authentication required" else "open relay (DANGEROUS)");
+
+  Eio.Switch.run @@ fun sw ->
+  (* Start queue manager in background *)
+  Qmgr.run_eio qmgr queue ~sw;
+
+  let ipaddr = parse_ipaddr host in
+  let addr = `Tcp (ipaddr, port) in
+  if implicit_tls then
+    match tls_config with
+    | Some tls -> Server.run_tls server ~sw ~net ~addr ~tls_config:tls ()
+    | None -> failwith "TLS config required for implicit TLS"
+  else
+    Server.run server ~sw ~net ~addr ()
+
+(* Run the server with file queue - single process mode *)
+let run_single_file ~port ~host ~tls_config ~implicit_tls ~local_domains ~require_auth ~queue_path ~dkim_config =
+  let module Server = Smtp_server.Make(Smtp_queue.File_queue)(Smtp_auth.Pam_auth) in
+  let module Qmgr = Smtp_qmgr.Make(Smtp_queue.File_queue) in
+  Eio_main.run @@ fun env ->
+  let net = Eio.Stdenv.net env in
+  let queue = Smtp_queue.File_queue.create_with_path ~base_path:queue_path in
+  let auth = Smtp_auth.Pam_auth.create ~service_name:"smtpd" in
+  let qmgr = Smtp_qmgr.create ~local_domains ?dkim_config () in
+
+  let config = {
+    Smtp_server.default_config with
+    hostname = host;
+    local_domains;
+    require_auth_for_relay = require_auth;
+    tls_config;
+  } in
+  let server = Server.create ~config ~queue ~auth in
+
+  let tls_mode = if implicit_tls then " (implicit TLS)"
+    else if tls_config <> None then " (STARTTLS available)" else "" in
+  Eio.traceln "SMTP server starting on %s:%d (%s, single-process)%s" host port queue_path tls_mode;
   Eio.traceln "Local domains: %s" (String.concat ", " local_domains);
   Eio.traceln "Relay policy: %s" (if require_auth then "authentication required" else "open relay (DANGEROUS)");
 
@@ -179,9 +217,10 @@ let run port host cert_file key_file implicit_tls forked local_domains require_a
     Printf.eprintf "Warning: No local domains configured. Use --local-domains.\n%!";
   end;
 
-  match forked with
-  | true -> run_forked ~port ~host ~tls_config ~local_domains ~require_auth ~queue_path ~dkim_config
-  | false -> run_single ~port ~host ~tls_config ~implicit_tls ~local_domains ~require_auth ~dkim_config
+  match forked, queue_path with
+  | true, _ -> run_forked ~port ~host ~tls_config ~local_domains ~require_auth ~queue_path ~dkim_config
+  | false, "" -> run_single_memory ~port ~host ~tls_config ~implicit_tls ~local_domains ~require_auth ~dkim_config
+  | false, _ -> run_single_file ~port ~host ~tls_config ~implicit_tls ~local_domains ~require_auth ~queue_path ~dkim_config
 
 (* Command-line arguments *)
 let port =
@@ -220,8 +259,8 @@ let require_auth =
   Arg.(value & flag & info ["require-auth"] ~doc)
 
 let queue_path =
-  let doc = "Base path for message queue storage (forked mode)." in
-  Arg.(value & opt string "/var/spool/smtpd" & info ["queue-path"] ~docv:"PATH" ~doc)
+  let doc = "Base path for message queue storage. When specified, enables persistent file-based queue instead of in-memory queue." in
+  Arg.(value & opt string "" & info ["queue-path"] ~docv:"PATH" ~doc)
 
 let dkim_key =
   let doc = "DKIM private key file (PEM format) for signing outbound messages." in
