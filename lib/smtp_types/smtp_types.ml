@@ -260,9 +260,12 @@ let is_relay_allowed ~state ~recipient ~local_domains =
   match state with
   | Authenticated { username = _; client_domain = _; tls_active = _ } ->
     true  (* Authenticated users can relay anywhere *)
+  | Mail_from_accepted { username = Some _; client_domain = _; sender = _; params = _; tls_active = _ }
+  | Rcpt_to_accepted { username = Some _; client_domain = _; sender = _; recipients = _; params = _; tls_active = _ } ->
+    true  (* Previously authenticated users can relay anywhere *)
   | Greeted { client_domain = _; tls_active = _ }
-  | Mail_from_accepted { username = _; client_domain = _; sender = _; params = _; tls_active = _ }
-  | Rcpt_to_accepted { username = _; client_domain = _; sender = _; recipients = _; params = _; tls_active = _ } ->
+  | Mail_from_accepted { username = None; client_domain = _; sender = _; params = _; tls_active = _ }
+  | Rcpt_to_accepted { username = None; client_domain = _; sender = _; recipients = _; params = _; tls_active = _ } ->
     is_local  (* Unauthenticated can only deliver to local domains *)
   | Initial
   | Data_mode { username = _; client_domain = _; sender = _; recipients = _; tls_active = _ }
