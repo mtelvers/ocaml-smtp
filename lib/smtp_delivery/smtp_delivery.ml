@@ -316,6 +316,14 @@ module Remote = struct
       @param msg The queued message
       @return Delivery result *)
   let deliver_message ?(dkim_config : Smtp_dkim.signing_config option) ~recipient ~msg () =
+    (* Debug: log DKIM config status *)
+    (try
+      let oc = open_out_gen [Open_creat; Open_append; Open_text] 0o644 "/tmp/dkim_debug.log" in
+      Printf.fprintf oc "=== Remote.deliver_message called at %f ===\n" (Unix.gettimeofday ());
+      Printf.fprintf oc "Recipient: %s@%s\n" recipient.local_part recipient.domain;
+      Printf.fprintf oc "DKIM config: %s\n" (match dkim_config with None -> "NONE" | Some _ -> "PRESENT");
+      close_out oc
+    with _ -> ());
     match lookup_mx recipient.domain with
     | Error e -> Deferred e
     | Ok mx_hosts ->
