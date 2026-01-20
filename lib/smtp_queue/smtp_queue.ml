@@ -139,10 +139,21 @@ end = struct
     index = [];
   }
 
-  let create_with_path ~base_path = {
-    base_path;
-    index = [];
-  }
+  let load_existing base_path =
+    try
+      let entries = Sys.readdir base_path in
+      Array.fold_left (fun acc entry ->
+        if Filename.check_suffix entry ".msg" then begin
+          let id = Filename.chop_suffix entry ".msg" in
+          let path = Filename.concat base_path entry in
+          (id, path) :: acc
+        end else acc
+      ) [] entries
+    with _ -> []
+
+  let create_with_path ~base_path =
+    let index = load_existing base_path in
+    { base_path; index }
 
   let ensure_dir path =
     try
@@ -172,6 +183,78 @@ end = struct
     Buffer.add_string buf msg.data;
     Buffer.contents buf
 
+  let deserialize_message content =
+    (* Split into headers and body at blank line *)
+    let header_end =
+      match Str.search_forward (Str.regexp "\r\n\r\n") content 0 with
+      | pos -> pos
+      | exception Not_found ->
+        match Str.search_forward (Str.regexp "\n\n") content 0 with
+        | pos -> pos
+        | exception Not_found -> String.length content
+    in
+    let headers_str = String.sub content 0 header_end in
+    let body_start =
+      if header_end + 4 <= String.length content &&
+         String.sub content header_end 4 = "\r\n\r\n" then header_end + 4
+      else if header_end + 2 <= String.length content then header_end + 2
+      else String.length content
+    in
+    let data = String.sub content body_start (String.length content - body_start) in
+
+    (* Parse headers *)
+    let lines = Str.split (Str.regexp "\r?\n") headers_str in
+    let id = ref "" in
+    let sender = ref None in
+    let recipients = ref [] in
+    let received_at = ref 0.0 in
+    let auth_user = ref None in
+    let client_ip = ref "" in
+    let client_domain = ref "" in
+
+    List.iter (fun line ->
+      if String.length line > 12 && String.sub line 0 12 = "X-Queue-Id: " then
+        id := String.sub line 12 (String.length line - 12)
+      else if String.length line > 10 && String.sub line 0 10 = "X-Sender: " then begin
+        let s = String.sub line 10 (String.length line - 10) in
+        sender := if s = "" || s = "<>" then None else parse_email_address s
+      end
+      else if String.length line > 13 && String.sub line 0 13 = "X-Recipient: " then begin
+        let r = String.sub line 13 (String.length line - 13) in
+        match parse_email_address r with
+        | Some addr -> recipients := addr :: !recipients
+        | None -> ()
+      end
+      else if String.length line > 15 && String.sub line 0 15 = "X-Received-At: " then
+        received_at := float_of_string (String.sub line 15 (String.length line - 15))
+      else if String.length line > 13 && String.sub line 0 13 = "X-Auth-User: " then
+        auth_user := Some (String.sub line 13 (String.length line - 13))
+      else if String.length line > 13 && String.sub line 0 13 = "X-Client-IP: " then
+        client_ip := String.sub line 13 (String.length line - 13)
+      else if String.length line > 17 && String.sub line 0 17 = "X-Client-Domain: " then
+        client_domain := String.sub line 17 (String.length line - 17)
+    ) lines;
+
+    {
+      id = !id;
+      sender = !sender;
+      recipients = List.rev !recipients;
+      data;
+      received_at = !received_at;
+      auth_user = !auth_user;
+      client_ip = !client_ip;
+      client_domain = !client_domain;
+    }
+
+  let read_message_file path =
+    try
+      let ic = open_in_bin path in
+      let len = in_channel_length ic in
+      let content = really_input_string ic len in
+      close_in ic;
+      Some (deserialize_message content)
+    with _ -> None
+
   let enqueue t msg =
     try
       ensure_dir t.base_path;
@@ -189,14 +272,22 @@ end = struct
   let dequeue t =
     match t.index with
     | [] -> None
-    | (_id, _path) :: rest ->
-      (* For now, just remove from index - full implementation would parse file *)
+    | (id, path) :: rest ->
       t.index <- rest;
-      None
+      match read_message_file path with
+      | Some msg -> Some { msg with id }
+      | None -> None
 
-  let peek _t _n =
-    (* Would need to read files and parse *)
-    []
+  let peek t n =
+    let rec take n acc = function
+      | [] -> List.rev acc
+      | _ when n <= 0 -> List.rev acc
+      | (id, path) :: rest ->
+        match read_message_file path with
+        | Some msg -> take (n - 1) ({ msg with id } :: acc) rest
+        | None -> take n acc rest
+    in
+    take n [] t.index
 
   let get _t ~id:_ =
     (* Would need to read and parse file *)
