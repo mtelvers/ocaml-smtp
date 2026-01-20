@@ -561,15 +561,13 @@ let sign ~config ~headers ~body =
     Printf.eprintf "[DKIM] Original body length: %d bytes\n%!" (String.length body);
     Printf.eprintf "[DKIM] Canonicalized body length: %d bytes\n%!" (String.length canon_body);
     Printf.eprintf "[DKIM] Body hash (base64): %s\n%!" body_hash_b64;
-    (* Log first 200 chars of canonicalized body in escaped form *)
-    let preview_len = min 200 (String.length canon_body) in
-    let preview = String.sub canon_body 0 preview_len in
-    let escaped = String.concat "" (List.map (fun c ->
-      let c = Char.code (String.get preview c) in
-      if c = 13 then "\\r" else if c = 10 then "\\n" else if c < 32 || c > 126 then Printf.sprintf "\\x%02x" c
-      else String.make 1 (Char.chr c)
-    ) (List.init preview_len Fun.id)) in
-    Printf.eprintf "[DKIM] Canonicalized body preview: %s\n%!" escaped;
+    (* Log hex dump of canonicalized body *)
+    let hex_dump s =
+      String.concat " " (List.init (String.length s) (fun i ->
+        Printf.sprintf "%02x" (Char.code s.[i])
+      ))
+    in
+    Printf.eprintf "[DKIM] Canonicalized body hex: %s\n%!" (hex_dump canon_body);
 
     (* Get current timestamp *)
     let timestamp = Int64.of_float (Unix.time ()) in
@@ -618,7 +616,9 @@ let sign ~config ~headers ~body =
     | Ok signature ->
       let signature_b64 = Base64.encode_string signature in
       let full_header = "DKIM-Signature: " ^ dkim_header_template ^ signature_b64 in
-      Ok (fold_header_line full_header)
+      let folded = fold_header_line full_header in
+      Printf.eprintf "[DKIM] Generated header: %s\n%!" (String.escaped folded);
+      Ok folded
   end
 
 (** Sign a complete message and return message with DKIM-Signature prepended *)

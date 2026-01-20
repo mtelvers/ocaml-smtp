@@ -292,16 +292,13 @@ module Remote = struct
                    (* Log the body that was actually sent *)
                    let body_sent = Buffer.contents sent_body in
                    Printf.eprintf "[DELIVERY] Body sent length: %d bytes\n%!" (String.length body_sent);
-                   let preview_len = min 200 (String.length body_sent) in
-                   if preview_len > 0 then begin
-                     let preview = String.sub body_sent 0 preview_len in
-                     let escaped = String.concat "" (List.map (fun i ->
-                       let c = Char.code preview.[i] in
-                       if c = 13 then "\\r" else if c = 10 then "\\n" else if c < 32 || c > 126 then Printf.sprintf "\\x%02x" c
-                       else String.make 1 (Char.chr c)
-                     ) (List.init preview_len Fun.id)) in
-                     Printf.eprintf "[DELIVERY] Body sent preview: %s\n%!" escaped
-                   end;
+                   (* Log hex dump of body sent *)
+                   let hex_dump s =
+                     String.concat " " (List.init (String.length s) (fun i ->
+                       Printf.sprintf "%02x" (Char.code s.[i])
+                     ))
+                   in
+                   Printf.eprintf "[DELIVERY] Body sent hex: %s\n%!" (hex_dump body_sent);
 
                    (* Read final response *)
                    match read_response ic with
