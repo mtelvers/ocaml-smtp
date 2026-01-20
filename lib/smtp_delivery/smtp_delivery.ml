@@ -265,6 +265,9 @@ module Remote = struct
                    (* Dot-stuff lines starting with . *)
                    let lines = String.split_on_char '\n' message in
                    List.iter (fun line ->
+                     (* Strip trailing CR if present (from CRLF line endings) *)
+                     let line = if String.length line > 0 && line.[String.length line - 1] = '\r'
+                       then String.sub line 0 (String.length line - 1) else line in
                      let line = if String.length line > 0 && line.[0] = '.' then "." ^ line else line in
                      output_string oc line;
                      output_string oc "\r\n"
