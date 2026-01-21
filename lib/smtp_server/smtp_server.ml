@@ -310,12 +310,17 @@ module Make
   let handle_data t flow ~read_line ~client_ip state =
     match state with
     | Rcpt_to_accepted { username; client_domain; sender; recipients; tls_active; params = _ } ->
+      (* Helper to preserve auth state after DATA completes *)
+      let next_state () = match username with
+        | Some u -> Authenticated { username = u; client_domain; tls_active }
+        | None -> Greeted { client_domain; tls_active }
+      in
       send_response flow ready_for_data;
       (* Read message body *)
       (match parse_data ~read_line with
        | Error msg ->
          send_response flow (temp_failure ~text:msg ());
-         Greeted { client_domain; tls_active }
+         next_state ()
        | Ok data ->
          (* Perform SPF/DKIM/DMARC checks *)
          let (auth_header, dmarc_result) =
@@ -332,7 +337,7 @@ module Make
 
          if should_reject then begin
            send_response flow (perm_failure ~text:"Message rejected by DMARC policy" ());
-           Greeted { client_domain; tls_active }
+           next_state ()
          end else begin
            (* Prepend Authentication-Results header *)
            let data = auth_header ^ data in
@@ -351,16 +356,16 @@ module Make
            match Queue.enqueue t.queue msg with
            | Error Smtp_queue.Queue_full ->
              send_response flow (temp_failure ~text:"Queue full, try again later" ());
-             Greeted { client_domain; tls_active }
+             next_state ()
            | Error Smtp_queue.Message_too_large ->
              send_response flow message_too_large;
-             Greeted { client_domain; tls_active }
+             next_state ()
            | Error (Smtp_queue.Storage_error s) ->
              send_response flow (temp_failure ~text:("Storage error: " ^ s) ());
-             Greeted { client_domain; tls_active }
+             next_state ()
            | Ok queue_id ->
              send_response flow (ok ~text:("Message accepted, queue ID: " ^ queue_id) ());
-             Greeted { client_domain; tls_active }
+             next_state ()
          end)
     | _ ->
       send_response flow bad_sequence;
