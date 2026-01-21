@@ -18,7 +18,7 @@ Implements [RFC 5321](https://datatracker.ietf.org/doc/html/rfc5321) (SMTP) with
 - **DKIM signing** (RFC 6376) - Sign outbound messages with DKIM
 - **DMARC policy checking** (RFC 7489) - Domain-based Message Authentication
 - **Local delivery** to Maildir format (compatible with IMAP servers)
-- **Remote delivery** via SMTP client with MX lookup
+- **Remote delivery** via SMTP client with MX lookup and opportunistic STARTTLS
 - **Queue manager** with exponential backoff retry
 
 ### Supported Extensions
@@ -162,8 +162,11 @@ Messages to external domains are delivered via SMTP:
 
 1. MX records are looked up for the recipient domain
 2. Connection is attempted to each MX host in priority order
-3. Message is sent using standard SMTP protocol
-4. Falls back to A record if no MX records exist
+3. **STARTTLS** is attempted if the server advertises it (opportunistic TLS)
+4. Message is sent using standard SMTP protocol
+5. Falls back to A record if no MX records exist
+
+The SMTP client uses opportunistic TLS - if the receiving server advertises STARTTLS in its EHLO response, we upgrade the connection to TLS before sending the message. This provides transport encryption for outbound mail delivery.
 
 ### Queue Manager
 
@@ -224,6 +227,51 @@ smtpd --local-domains example.com \
 ```
 
 Messages sent to remote domains will now include a DKIM-Signature header.
+
+## MTA-STS (RFC 8461)
+
+MTA-STS (Mail Transfer Agent Strict Transport Security) allows you to declare that your domain supports TLS and that sending servers should require TLS when delivering mail to you.
+
+### DNS Records
+
+Add a TXT record at `_mta-sts.example.com`:
+
+```
+v=STSv1; id=20260121
+```
+
+The `id` should be updated whenever you change your policy.
+
+### Policy File
+
+Serve the policy file at `https://mta-sts.example.com/.well-known/mta-sts.txt`:
+
+```
+version: STSv1
+mode: enforce
+mx: mail.example.com
+max_age: 604800
+```
+
+Policy modes:
+- `testing` - Report failures but don't reject mail
+- `enforce` - Require TLS, reject on failure
+
+### Web Server Setup (Caddy)
+
+The easiest way to serve MTA-STS is with Caddy, which handles TLS certificates automatically:
+
+```
+# /etc/caddy/Caddyfile
+mta-sts.example.com {
+    root * /var/www/mta-sts
+    file_server
+}
+```
+
+### DNS A Record
+
+Add an A record for `mta-sts.example.com` pointing to your server.
 
 ## Architecture
 
