@@ -22,6 +22,7 @@ depends: [
   "mirage-crypto" {>= "1.0"}
   "mirage-crypto-pk" {>= "1.0"}
   "mirage-crypto-rng" {>= "1.0"}
+  "ca-certs"
   "menhir"
   "faraday"
   "dns" {>= "8.0"}
