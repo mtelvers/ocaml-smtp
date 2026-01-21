@@ -226,22 +226,38 @@ module Remote = struct
       String.uppercase_ascii text = "STARTTLS"
     ) response
 
+  (** Check if a string is an IP address *)
+  let is_ip_address s =
+    (* Simple check: if it parses as an IP, it's an IP *)
+    try
+      ignore (Unix.inet_addr_of_string s);
+      true
+    with Failure _ -> false
+
   (** Create TLS client config with system CA certificates *)
   let make_tls_client_config ~host =
-    (* Use default authenticator that trusts system CA certificates *)
-    let authenticator =
-      match Ca_certs.authenticator () with
-      | Ok auth -> auth
-      | Error _ ->
-        (* Fall back to no authentication if CA certs not available *)
-        fun ?ip:_ ~host:_ _ -> Ok None
-    in
-    match Domain_name.of_string host with
-    | Error _ -> Tls.Config.client ~authenticator ()
-    | Ok domain ->
-      match Domain_name.host domain with
+    (* If host is an IP address, use opportunistic TLS without cert validation.
+       We can't validate certificates against IP addresses - they need hostnames.
+       This still provides encryption, just not authentication. *)
+    if is_ip_address host then
+      (* No-op authenticator for IP addresses - accept any certificate *)
+      let authenticator = fun ?ip:_ ~host:_ _ -> Ok None in
+      Tls.Config.client ~authenticator ()
+    else
+      (* Use CA certificates for hostname validation *)
+      let authenticator =
+        match Ca_certs.authenticator () with
+        | Ok auth -> auth
+        | Error _ ->
+          (* Fall back to no authentication if CA certs not available *)
+          fun ?ip:_ ~host:_ _ -> Ok None
+      in
+      match Domain_name.of_string host with
       | Error _ -> Tls.Config.client ~authenticator ()
-      | Ok host_domain -> Tls.Config.client ~authenticator ~peer_name:host_domain ()
+      | Ok domain ->
+        match Domain_name.host domain with
+        | Error _ -> Tls.Config.client ~authenticator ()
+        | Ok host_domain -> Tls.Config.client ~authenticator ~peer_name:host_domain ()
 
   (** Perform STARTTLS upgrade on the connection *)
   let upgrade_to_tls ~host sock =
@@ -249,11 +265,14 @@ module Remote = struct
     | Error _ -> Error "Failed to create TLS config"
     | Ok tls_config ->
       try
-        let host_domain = match Domain_name.of_string host with
-          | Error _ -> None
-          | Ok dn -> match Domain_name.host dn with
-            | Ok h -> Some h
+        (* For IP addresses, don't pass a hostname (no SNI) *)
+        let host_domain =
+          if is_ip_address host then None
+          else match Domain_name.of_string host with
             | Error _ -> None
+            | Ok dn -> match Domain_name.host dn with
+              | Ok h -> Some h
+              | Error _ -> None
         in
         let tls = Tls_unix.client_of_fd tls_config ?host:host_domain sock in
         Ok (Tls { tls; sock })
