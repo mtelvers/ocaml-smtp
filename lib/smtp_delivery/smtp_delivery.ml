@@ -138,15 +138,60 @@ end
 
 module Remote = struct
 
-  (** Read a line from socket *)
-  let read_line ic =
-    try Some (input_line ic)
-    with End_of_file -> None
+  (** I/O context - abstracts plain vs TLS connections *)
+  type io_context =
+    | Plain of { ic : in_channel; oc : out_channel; sock : Unix.file_descr }
+    | Tls of { tls : Tls_unix.t; sock : Unix.file_descr }
+
+  (** Read a line from I/O context *)
+  let read_line_ctx ctx =
+    match ctx with
+    | Plain { ic; _ } ->
+      (try Some (input_line ic) with End_of_file -> None)
+    | Tls { tls; _ } ->
+      (* Read byte by byte until we hit \n *)
+      let buf = Buffer.create 256 in
+      let byte = Bytes.create 1 in
+      try
+        let rec loop () =
+          let n = Tls_unix.read tls byte ~off:0 ~len:1 in
+          if n = 0 then
+            if Buffer.length buf = 0 then None
+            else Some (Buffer.contents buf)
+          else begin
+            let c = Bytes.get byte 0 in
+            if c = '\n' then Some (Buffer.contents buf)
+            else begin
+              Buffer.add_char buf c;
+              loop ()
+            end
+          end
+        in
+        loop ()
+      with _ -> None
+
+  (** Write string to I/O context *)
+  let write_ctx ctx s =
+    match ctx with
+    | Plain { oc; _ } ->
+      output_string oc s;
+      flush oc
+    | Tls { tls; _ } ->
+      Tls_unix.write tls s
+
+  (** Close I/O context *)
+  let close_ctx ctx =
+    match ctx with
+    | Plain { ic; oc; _ } ->
+      (try close_in ic with _ -> ());
+      (try close_out oc with _ -> ())
+    | Tls { tls; _ } ->
+      (try Tls_unix.close tls with _ -> ())
 
   (** Read SMTP response (may be multi-line) *)
-  let read_response ic =
+  let read_response ctx =
     let rec loop lines =
-      match read_line ic with
+      match read_line_ctx ctx with
       | None -> Error "Connection closed"
       | Some line ->
         let line = String.trim line in
@@ -171,11 +216,54 @@ module Remote = struct
     code >= 200 && code < 400
 
   (** Send a command and get response *)
-  let send_command oc ic cmd =
-    output_string oc cmd;
-    output_string oc "\r\n";
-    flush oc;
-    read_response ic
+  let send_command ctx cmd =
+    write_ctx ctx (cmd ^ "\r\n");
+    read_response ctx
+
+  (** Check if EHLO response advertises STARTTLS *)
+  let has_starttls response =
+    List.exists (fun (_, text) ->
+      String.uppercase_ascii text = "STARTTLS"
+    ) response
+
+  (** Create TLS client config with system CA certificates *)
+  let make_tls_client_config ~host =
+    (* Use default authenticator that trusts system CA certificates *)
+    let authenticator =
+      match Ca_certs.authenticator () with
+      | Ok auth -> auth
+      | Error _ ->
+        (* Fall back to no authentication if CA certs not available *)
+        fun ?ip:_ ~host:_ _ -> Ok None
+    in
+    match Domain_name.of_string host with
+    | Error _ -> Tls.Config.client ~authenticator ()
+    | Ok domain ->
+      match Domain_name.host domain with
+      | Error _ -> Tls.Config.client ~authenticator ()
+      | Ok host_domain -> Tls.Config.client ~authenticator ~peer_name:host_domain ()
+
+  (** Perform STARTTLS upgrade on the connection *)
+  let upgrade_to_tls ~host sock =
+    match make_tls_client_config ~host with
+    | Error _ -> Error "Failed to create TLS config"
+    | Ok tls_config ->
+      try
+        let host_domain = match Domain_name.of_string host with
+          | Error _ -> None
+          | Ok dn -> match Domain_name.host dn with
+            | Ok h -> Some h
+            | Error _ -> None
+        in
+        let tls = Tls_unix.client_of_fd tls_config ?host:host_domain sock in
+        Ok (Tls { tls; sock })
+      with
+      | Tls_unix.Tls_alert alert ->
+        Error (Printf.sprintf "TLS alert: %s" (Tls.Packet.alert_type_to_string alert))
+      | Tls_unix.Tls_failure failure ->
+        Error (Printf.sprintf "TLS failure: %s" (Tls.Engine.string_of_failure failure))
+      | exn ->
+        Error (Printf.sprintf "TLS error: %s" (Printexc.to_string exn))
 
   (** Connect to an SMTP server and send a message.
 
@@ -205,41 +293,72 @@ module Remote = struct
 
         let ic = Unix.in_channel_of_descr sock in
         let oc = Unix.out_channel_of_descr sock in
+        let ctx = ref (Plain { ic; oc; sock }) in
 
         let cleanup result =
-          (try send_command oc ic "QUIT" |> ignore with _ -> ());
-          (try close_in ic with _ -> ());
-          (try close_out oc with _ -> ());
+          (try send_command !ctx "QUIT" |> ignore with _ -> ());
+          close_ctx !ctx;
           result
         in
 
         (* Read greeting *)
-        (match read_response ic with
+        (match read_response !ctx with
          | Error e -> cleanup (Deferred e)
          | Ok ((code, _) :: _) when not (is_success_response code) ->
            cleanup (Deferred "Server rejected connection")
          | _ ->
 
-           (* Send EHLO, fall back to HELO if needed *)
+           (* Send EHLO *)
            let my_hostname = Unix.gethostname () in
-           let ehlo_ok = match send_command oc ic ("EHLO " ^ my_hostname) with
-             | Ok ((code, _) :: _) when is_success_response code -> true
+           let ehlo_response = send_command !ctx ("EHLO " ^ my_hostname) in
+
+           let (ehlo_ok, starttls_available) = match ehlo_response with
+             | Ok (((code, _) :: _) as resp) when is_success_response code ->
+               (true, has_starttls resp)
              | _ ->
-               (* Try HELO as fallback *)
-               match send_command oc ic ("HELO " ^ my_hostname) with
-               | Ok ((code, _) :: _) when is_success_response code -> true
-               | _ -> false
+               (* Try HELO as fallback (no STARTTLS with HELO) *)
+               match send_command !ctx ("HELO " ^ my_hostname) with
+               | Ok ((code, _) :: _) when is_success_response code -> (true, false)
+               | _ -> (false, false)
            in
            if not ehlo_ok then
              cleanup (Deferred "EHLO/HELO rejected")
-           else
+           else begin
+             (* Attempt STARTTLS if available *)
+             let tls_upgraded =
+               if starttls_available then begin
+                 match send_command !ctx "STARTTLS" with
+                 | Ok ((220, _) :: _) ->
+                   (* Server ready for TLS - upgrade connection *)
+                   (* Need to get the raw socket from the context *)
+                   let raw_sock = match !ctx with
+                     | Plain { sock; _ } -> sock
+                     | Tls { sock; _ } -> sock
+                   in
+                   (* Note: We're upgrading from Plain to TLS, so we don't close channels here.
+                      The TLS layer takes over the socket directly. *)
+                   begin match upgrade_to_tls ~host raw_sock with
+                   | Ok new_ctx ->
+                     ctx := new_ctx;
+                     (* Re-send EHLO after TLS upgrade per RFC 3207 *)
+                     (match send_command !ctx ("EHLO " ^ my_hostname) with
+                      | Ok ((code, _) :: _) when is_success_response code -> true
+                      | _ -> false)  (* TLS ok but EHLO failed *)
+                   | Error _ -> false  (* TLS upgrade failed, continue without *)
+                   end
+                 | _ -> false  (* STARTTLS rejected, continue without *)
+               end else
+                 false
+             in
+             (* Log TLS status - in production this would go to a proper logger *)
+             ignore tls_upgraded;
 
              (* Send MAIL FROM *)
              let sender_str = match sender with
                | Some s -> email_to_string s
                | None -> ""
              in
-             match send_command oc ic (Printf.sprintf "MAIL FROM:<%s>" sender_str) with
+             match send_command !ctx (Printf.sprintf "MAIL FROM:<%s>" sender_str) with
              | Error e -> cleanup (Deferred e)
              | Ok ((code, text) :: _) when not (is_success_response code) ->
                if code >= 500 then cleanup (Failed text)
@@ -247,7 +366,7 @@ module Remote = struct
              | _ ->
 
                (* Send RCPT TO *)
-               match send_command oc ic (Printf.sprintf "RCPT TO:<%s>" (email_to_string recipient)) with
+               match send_command !ctx (Printf.sprintf "RCPT TO:<%s>" (email_to_string recipient)) with
                | Error e -> cleanup (Deferred e)
                | Ok ((code, text) :: _) when not (is_success_response code) ->
                  if code >= 500 then cleanup (Failed text)
@@ -255,7 +374,7 @@ module Remote = struct
                | _ ->
 
                  (* Send DATA *)
-                 match send_command oc ic "DATA" with
+                 match send_command !ctx "DATA" with
                  | Error e -> cleanup (Deferred e)
                  | Ok ((code, _) :: _) when code <> 354 ->
                    cleanup (Deferred "DATA not accepted")
@@ -274,14 +393,12 @@ module Remote = struct
                      let line = if String.length line > 0 && line.[String.length line - 1] = '\r'
                        then String.sub line 0 (String.length line - 1) else line in
                      let line = if String.length line > 0 && line.[0] = '.' then "." ^ line else line in
-                     output_string oc line;
-                     output_string oc "\r\n"
+                     write_ctx !ctx (line ^ "\r\n")
                    ) lines;
-                   output_string oc ".\r\n";
-                   flush oc;
+                   write_ctx !ctx ".\r\n";
 
                    (* Read final response *)
-                   match read_response ic with
+                   match read_response !ctx with
                    | Error e -> cleanup (Deferred e)
                    | Ok ((code, text) :: _) ->
                      if is_success_response code then
@@ -290,7 +407,8 @@ module Remote = struct
                        cleanup (Failed text)
                      else
                        cleanup (Deferred text)
-                   | Ok [] -> cleanup (Deferred "Empty response"))
+                   | Ok [] -> cleanup (Deferred "Empty response")
+           end)
     with
     | Failure msg -> Deferred msg
     | Unix.Unix_error (code, func, _) ->
