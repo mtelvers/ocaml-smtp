@@ -269,9 +269,31 @@ mta-sts.example.com {
 }
 ```
 
-### DNS A Record
+### Complete DNS Zone Example
 
-Add an A record for `mta-sts.example.com` pointing to your server.
+Here's a complete DNS zone file showing all required records for a mail server:
+
+```
+@ 86400 IN SOA ns1.example.net. hostmaster.example.net. 1769004210 10800 3600 604800 10800
+@ 10800 IN A 217.70.184.38
+@ 10800 IN MX 10 mail.example.com.
+@ 10800 IN TXT "v=spf1 mx -all"
+_dmarc 10800 IN TXT "v=DMARC1; p=reject; rua=mailto:dmarc@example.com"
+_mta-sts 10800 IN TXT "v=STSv1; id=20260121"
+mail 10800 IN A 51.15.95.113
+mail._domainkey 10800 IN TXT "v=DKIM1; k=rsa; p=MIIBIjANBgkq...your_public_key..."
+mta-sts 10800 IN A 51.15.95.113
+```
+
+| Record | Purpose |
+|--------|---------|
+| `MX` | Points to your mail server |
+| `SPF` | Authorizes MX servers to send mail |
+| `DKIM` | Public key for signature verification |
+| `DMARC` | Policy for failed SPF/DKIM checks |
+| `_mta-sts` | Declares MTA-STS policy version |
+| `mta-sts` | A record for the policy web server |
+| `mail` | A record for the mail server |
 
 ## Architecture
 
