@@ -619,16 +619,22 @@ module Make
   let handle_connection t flow addr =
     let client_ip = addr_to_ip addr in
     Eio.traceln "SMTP: connection from %s" client_ip;
-    match handle_connection_internal t flow ~client_ip ~tls_active:false ~send_greeting:true with
-    | `Done -> ()
-    | `Upgrade_tls _state ->
-      match t.config.tls_config with
-      | None -> ()
-      | Some tls_config ->
-        let tls_flow = Tls_eio.server_of_flow tls_config flow in
-        (* After STARTTLS, client must re-issue EHLO *)
-        ignore (command_loop t (tls_flow :> _ Eio.Flow.two_way) ~client_ip
-                  (Greeted { client_domain = "unknown"; tls_active = true }))
+    try
+      match handle_connection_internal t flow ~client_ip ~tls_active:false ~send_greeting:true with
+      | `Done -> ()
+      | `Upgrade_tls _state ->
+        match t.config.tls_config with
+        | None -> ()
+        | Some tls_config ->
+          Eio.traceln "SMTP: upgrading to TLS for %s" client_ip;
+          let tls_flow = Tls_eio.server_of_flow tls_config flow in
+          (* After STARTTLS, client must re-issue EHLO *)
+          ignore (command_loop t (tls_flow :> _ Eio.Flow.two_way) ~client_ip
+                    (Greeted { client_domain = "unknown"; tls_active = true }))
+    with exn ->
+      let bt = Printexc.get_backtrace () in
+      Eio.traceln "SMTP: exception for %s: %s\n%s" client_ip (Printexc.to_string exn) bt;
+      raise exn
 
   (** Connection handler for implicit TLS *)
   let handle_connection_tls t tls_flow addr =

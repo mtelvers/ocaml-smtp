@@ -164,6 +164,8 @@ let run_forked ~port ~host ~tls_config ~local_domains ~require_auth ~queue_path 
 (* Main entry point *)
 let run port host cert_file key_file implicit_tls forked local_domains require_auth queue_path
     dkim_key_file dkim_domain dkim_selector =
+  (* Enable backtrace recording for debugging *)
+  Printexc.record_backtrace true;
   (* Initialize cryptographic RNG for TLS *)
   Mirage_crypto_rng_unix.use_default ();
 
