@@ -1,5 +1,5 @@
 (executable
- (name main)
+ (name smtpd)
  (public_name smtpd)
  (libraries smtp_types smtp_parser smtp_auth smtp_queue smtp_server
             smtp_delivery smtp_qmgr smtp_dkim

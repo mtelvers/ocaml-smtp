@@ -364,6 +364,11 @@ module Make
              send_response flow (temp_failure ~text:("Storage error: " ^ s) ());
              next_state ()
            | Ok queue_id ->
+             Eio.traceln "SMTP: accepted message %s from %s to %s (auth=%s)"
+               queue_id
+               (reverse_path_to_string sender)
+               (String.concat "," (List.map email_to_string recipients))
+               (match username with Some u -> u | None -> "none");
              send_response flow (ok ~text:("Message accepted, queue ID: " ^ queue_id) ());
              next_state ()
          end)
@@ -613,6 +618,7 @@ module Make
   (** Connection handler for cleartext connections *)
   let handle_connection t flow addr =
     let client_ip = addr_to_ip addr in
+    Eio.traceln "SMTP: connection from %s" client_ip;
     match handle_connection_internal t flow ~client_ip ~tls_active:false ~send_greeting:true with
     | `Done -> ()
     | `Upgrade_tls _state ->
@@ -627,6 +633,7 @@ module Make
   (** Connection handler for implicit TLS *)
   let handle_connection_tls t tls_flow addr =
     let client_ip = addr_to_ip addr in
+    Eio.traceln "SMTP: TLS connection from %s" client_ip;
     ignore (handle_connection_internal t (tls_flow :> _ Eio.Flow.two_way)
               ~client_ip ~tls_active:true ~send_greeting:true)
 
@@ -674,7 +681,8 @@ module Make
     | Unix.ADDR_UNIX _ -> "127.0.0.1"
 
   (** Fork-based connection handler for privilege separation *)
-  let handle_connection_forked t flow ~client_ip ~tls_active:_ =
+  let handle_connection_forked t flow ~client_ip ~tls_active =
+    Eio.traceln "SMTP: %sconnection from %s (forked)" (if tls_active then "TLS " else "") client_ip;
     send_greeting t flow;
     (* Run initial authentication loop as root *)
     let rec session_loop state =
